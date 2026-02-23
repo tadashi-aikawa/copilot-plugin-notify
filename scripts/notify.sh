@@ -9,35 +9,35 @@ if [ "$DEBUG_MODE" = "1" ]; then
   printf '%s\n' "$INPUT" >>"$DEBUG_PATH"
 fi
 
-STOP_REASON="$ (
+STOP_REASON="$(
   echo "$INPUT" | jq -r '
     .stopReason
     // empty
   '
 )"
 
-TRANSCRIPT_PATH="$ (
+TRANSCRIPT_PATH="$(
   echo "$INPUT" | jq -r '
     .transcriptPath
     // empty
   '
 )"
 
-TOOL_NAME="$ (
+TOOL_NAME="$(
   echo "$INPUT" | jq -r '
     .toolName
     // empty
   '
 )"
 
-INPUT_TOOL_REQUESTS_COUNT="$ (
+INPUT_TOOL_REQUESTS_COUNT="$(
   echo "$INPUT" | jq -r '
     (.data.toolRequests // [])
     | if type == "array" then length else 1 end
   '
 )"
 
-INPUT_TIMESTAMP_MS="$ (
+INPUT_TIMESTAMP_MS="$(
   echo "$INPUT" | jq -r '
     .timestamp as $ts
     | if ($ts | type) == "number" then
@@ -81,7 +81,7 @@ elif [ "$STOP_REASON" = "end_turn" ] || [ -n "$TRANSCRIPT_PATH" ]; then
 
     ATTEMPT=0
     while [ "$ATTEMPT" -lt "$AGENTSTOP_POLL_ATTEMPTS" ]; do
-      BODY="$ (
+      BODY="$(
         jq -r --argjson min_ts "$MIN_ACCEPT_TS_MS" '
           select(.type == "assistant.message")
           | select((.data.toolRequests // []) | length == 0)
