@@ -12,6 +12,8 @@
 
 Copilot CLI hook events are emitted as OSC 777 notification escape sequences; listeners such as cmux can consume these notifications.
 
+Tested on macOS only.
+
 ## Install
 
 ```bash
