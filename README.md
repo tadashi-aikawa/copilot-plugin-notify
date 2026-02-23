@@ -1,5 +1,14 @@
 # copilot-plugin-notify
 
+> ⚠️ IMPORTANT — Temporary workaround
+>
+> This plugin is a temporary shim until the following upstream Copilot CLI issues are resolved:
+>
+> - https://github.com/github/copilot-cli/issues/1067
+> - https://github.com/github/copilot-cli/issues/1128
+>
+> Remove this plugin once those issues are fixed.
+>
 Copilot CLI hook events are emitted as OSC 777 notification escape sequences; listeners such as cmux can consume these notifications.
 
 ## Files
