@@ -72,6 +72,19 @@ if [ -n "$SUMMARY" ]; then
   )"
 fi
 
+TOOL_PATH="$(
+  echo "$INPUT" | jq -r '
+    .toolArgs as $toolArgs
+    | if ($toolArgs | type) == "object" then
+        ($toolArgs.path // "")
+      elif ($toolArgs | type) == "string" then
+        (try (($toolArgs | fromjson).path // "") catch "")
+      else
+        ""
+      end
+  '
+)"
+
 INPUT_TOOL_REQUESTS_COUNT="$(
   echo "$INPUT" | jq -r '
     (.data.toolRequests // [])
@@ -107,7 +120,13 @@ if [[ "$TOOL_NAME" = "ask_user" ]]; then
 elif [[ "$TOOL_NAME" = "exit_plan_mode" ]]; then
   BODY="$SUMMARY"
 elif [[ "$TOOL_NAME" = "bash" ]]; then
-  BODY="Copilot requests tool execution: ${TOOL_NAME}"
+  BODY="${TOOL_NAME}"
+elif [[ "$TOOL_NAME" = "edit" ]]; then
+  if [ -n "$TOOL_PATH" ]; then
+    BODY="edit: ${TOOL_PATH}"
+  else
+    BODY="edit"
+  fi
 elif [[ "$TOOL_NAME" = "report_intent" ]]; then
   # DO NOTHING
   echo ""
