@@ -1,12 +1,12 @@
 {
-  "name": "cmux-notify",
-  "description": "Send cmux notifications when Copilot CLI sessions end.",
+  "name": "copilot-plugin-notify",
+  "description": "Send notifications via OSC 777 (e.g., cmux) when Copilot CLI sessions end.",
   "version": "0.1.0",
   "license": "MIT",
   "keywords": [
     "copilot-cli",
     "hooks",
-    "cmux",
+    "notify",
     "notification"
   ],
   "hooks": "hooks.json"
