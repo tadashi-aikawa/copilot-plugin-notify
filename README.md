@@ -24,3 +24,6 @@ copilot plugin install tadashi-aikawa/copilot-plugin-cmux-notify
 
 - `CMUX_NOTIFY_PRETOOL_TOOLS`: comma-separated tool names for `preToolUse` notifications (default: `shell,bash`)
 - `CMUX_NOTIFY_DEBUG`: set to `1` to append `agentStop` payload JSON into `/tmp/cmux-notify-agent-stop.jsonl`
+- `CMUX_NOTIFY_AGENTSTOP_POLL_ATTEMPTS`: number of retries when waiting for the latest `assistant.message` after `agentStop` (default: `10`)
+- `CMUX_NOTIFY_AGENTSTOP_POLL_INTERVAL_SEC`: interval seconds between retries (default: `0.05`)
+- `CMUX_NOTIFY_AGENTSTOP_ACCEPTABLE_AGE_MS`: maximum age (ms) from hook input timestamp for candidate messages to avoid stale notifications (default: `3000`)

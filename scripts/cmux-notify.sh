@@ -2,19 +2,16 @@
 set -euo pipefail
 
 INPUT="$(cat)"
+DEBUG_MODE="${CMUX_NOTIFY_DEBUG:-0}"
+DEBUG_PATH="${CMUX_NOTIFY_DEBUG_PATH:-/tmp/cmux-notify.jsonl}"
 
-HOOK_EVENT_NAME="$(
-  echo "$INPUT" | jq -r '
-    .hook_event_name
-    // .hookEventName
-    // empty
-  '
-)"
+if [ "$DEBUG_MODE" = "1" ]; then
+  printf '%s\n' "$INPUT" >>"$DEBUG_PATH"
+fi
 
 STOP_REASON="$(
   echo "$INPUT" | jq -r '
     .stopReason
-    // .stop_reason
     // empty
   '
 )"
@@ -22,7 +19,6 @@ STOP_REASON="$(
 TRANSCRIPT_PATH="$(
   echo "$INPUT" | jq -r '
     .transcriptPath
-    // .transcript_path
     // empty
   '
 )"
@@ -30,75 +26,101 @@ TRANSCRIPT_PATH="$(
 TOOL_NAME="$(
   echo "$INPUT" | jq -r '
     .toolName
-    // .tool_name
-    // .tool?.name
     // empty
   '
 )"
 
-TITLE="Copilot"
+INPUT_TOOL_REQUESTS_COUNT="$(
+  echo "$INPUT" | jq -r '
+    (.data.toolRequests // [])
+    | if type == "array" then length else 1 end
+  '
+)"
+
+INPUT_TIMESTAMP_MS="$(
+  echo "$INPUT" | jq -r '
+    .timestamp as $ts
+    | if ($ts | type) == "number" then
+        ($ts | floor)
+      elif ($ts | type) == "string" then
+        (try (($ts | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) * 1000 | floor) catch 0)
+      else
+        0
+      end
+  '
+)"
+
+AGENTSTOP_POLL_ATTEMPTS="${CMUX_NOTIFY_AGENTSTOP_POLL_ATTEMPTS:-10}"
+AGENTSTOP_POLL_INTERVAL_SEC="${CMUX_NOTIFY_AGENTSTOP_POLL_INTERVAL_SEC:-0.05}"
+AGENTSTOP_ACCEPTABLE_AGE_MS="${CMUX_NOTIFY_AGENTSTOP_ACCEPTABLE_AGE_MS:-3000}"
+
 BODY=""
-PRETOOL_TOOLS="${CMUX_NOTIFY_PRETOOL_TOOLS:-shell,bash}"
-DEBUG_MODE="${CMUX_NOTIFY_DEBUG:-0}"
 
-in_allow_list() {
-  local value="$1"
-  local list="$2"
-  local item
+if [ "$DEBUG_MODE" = "1" ]; then
+  printf 'TOOL_NAME: %s\n' "$TOOL_NAME" >>"$DEBUG_PATH"
+fi
 
-  IFS=',' read -r -a items <<< "$list"
-  for item in "${items[@]}"; do
-    if [ "$value" = "$item" ]; then
-      return 0
+if [[ "$TOOL_NAME" = "bash" ]]; then
+  BODY="Copilot requests tool execution: ${TOOL_NAME}"
+elif [[ "$TOOL_NAME" = "report_intent" ]]; then
+  # DO NOTHING
+  echo ""
+elif [ "$STOP_REASON" = "end_turn" ] || [ -n "$TRANSCRIPT_PATH" ]; then
+  if [ "$DEBUG_MODE" = "1" ]; then
+    printf '%s\n' "$INPUT" >>/tmp/cmux-notify-agent-stop.jsonl
+  fi
+
+  if [ "$INPUT_TOOL_REQUESTS_COUNT" -eq 0 ] && [ -n "$TRANSCRIPT_PATH" ]; then
+    MIN_ACCEPT_TS_MS=0
+    if [ "$INPUT_TIMESTAMP_MS" -gt 0 ]; then
+      MIN_ACCEPT_TS_MS=$((INPUT_TIMESTAMP_MS - AGENTSTOP_ACCEPTABLE_AGE_MS))
+      if [ "$MIN_ACCEPT_TS_MS" -lt 0 ]; then
+        MIN_ACCEPT_TS_MS=0
+      fi
     fi
-  done
-  return 1
+
+    ATTEMPT=0
+    while [ "$ATTEMPT" -lt "$AGENTSTOP_POLL_ATTEMPTS" ]; do
+      BODY="$(
+        jq -r --argjson min_ts "$MIN_ACCEPT_TS_MS" '
+          select(.type == "assistant.message")
+          | select((.data.toolRequests // []) | length == 0)
+          | {
+              ts_ms: (try ((.timestamp | sub("\\.[0-9]+Z$"; "Z") | fromdateiso8601) * 1000 | floor) catch 0),
+              content: (.data.content // "")
+            }
+          | select((.content | length) > 0)
+          | select(.ts_ms >= $min_ts)
+          | .content
+        ' "$TRANSCRIPT_PATH" |
+          awk 'length > 0 { line = $0 } END { print line }'
+      )"
+
+      if [ -n "$BODY" ]; then
+        break
+      fi
+
+      ATTEMPT=$((ATTEMPT + 1))
+      if [ "$ATTEMPT" -lt "$AGENTSTOP_POLL_ATTEMPTS" ]; then
+        sleep "$AGENTSTOP_POLL_INTERVAL_SEC"
+      fi
+    done
+  fi
+fi
+
+notify() {
+  local title="$1"
+  local body="$2"
+  if [ "$DEBUG_MODE" = "1" ]; then
+    printf 'title: %s | body: %s' "$title" "$body" >>"$DEBUG_PATH"
+  fi
+  printf '\e]777;notify;%s;%s\a' "$title" "$body" >/dev/tty
 }
 
-if [ -n "$TOOL_NAME" ] && [ "$TOOL_NAME" != "null" ] && in_allow_list "$TOOL_NAME" "$PRETOOL_TOOLS"; then
-  BODY="Copilot requests tool execution: ${TOOL_NAME}"
-elif [ "$HOOK_EVENT_NAME" = "agentStop" ] || [ "$STOP_REASON" = "end_turn" ] || [ -n "$TRANSCRIPT_PATH" ]; then
-  if [ "$DEBUG_MODE" = "1" ]; then
-    printf '%s\n' "$INPUT" >> /tmp/cmux-notify-agent-stop.jsonl
-  fi
-
-  if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
-    BODY="$(
-      jq -r '
-        select(.type == "assistant.message")
-        | .data.content // empty
-      ' "$TRANSCRIPT_PATH" \
-        | awk 'length > 0 { line = $0 } END { print line }'
-    )"
-  else
-    BODY="$(
-      echo "$INPUT" | jq -r '
-        .finalMessage
-        // .["last-assistant-message"]
-        // .lastAssistantMessage
-        // .assistantMessage
-        // .message
-        // .text
-        // .output_text
-        // .outputText
-        // .response
-        // .responseText
-        // .content
-        // .completion
-        // empty
-      '
-    )"
-  fi
+if [[ ! -z "$BODY" ]]; then
+  notify "Copilot" "$BODY"
 fi
 
-if [ -z "$BODY" ] || [ "$BODY" = "null" ]; then
-  if [ -n "$TOOL_NAME" ] && [ "$TOOL_NAME" != "null" ] && in_allow_list "$TOOL_NAME" "$PRETOOL_TOOLS"; then
-    BODY="Copilot requests tool execution approval"
-  elif [ "$HOOK_EVENT_NAME" = "agentStop" ] || [ "$STOP_REASON" = "end_turn" ] || [ -n "$TRANSCRIPT_PATH" ]; then
-    BODY="Copilot task completed"
-  else
-    exit 0
-  fi
+if [ "$DEBUG_MODE" = "1" ]; then
+  printf "\n\n" >>"$DEBUG_PATH"
 fi
-
-cmux notify --title "$TITLE" --body "$BODY"
