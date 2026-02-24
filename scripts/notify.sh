@@ -7,6 +7,7 @@ DEBUG_PATH="${COPILOT_NOTIFY_DEBUG_PATH:-/tmp/copilot-notify.jsonl}"
 ALLOW_TOOL_RULES="${COPILOT_NOTIFY_ALLOW_TOOL_RULES:-}"
 DENY_TOOL_RULES="${COPILOT_NOTIFY_DENY_TOOL_RULES:-}"
 ALLOW_URLS="${COPILOT_NOTIFY_ALLOW_URLS:-}"
+ALLOW_PATHS="${COPILOT_NOTIFY_ALLOW_PATHS:-}"
 
 if [ "$DEBUG_MODE" = "1" ]; then
   printf '%s\n' "$INPUT" >>"$DEBUG_PATH"
@@ -36,6 +37,13 @@ TRANSCRIPT_PATH="$(
 TOOL_NAME="$(
   echo "$INPUT" | jq -r '
     .toolName
+    // empty
+  '
+)"
+
+CWD_PATH="$(
+  echo "$INPUT" | jq -r '
+    .cwd
     // empty
   '
 )"
@@ -231,6 +239,107 @@ normalize_allow_url_entry() {
   printf '%s' "$value" | tr '[:upper:]' '[:lower:]'
 }
 
+trim_trailing_slashes() {
+  local value="$1"
+  while [ "${#value}" -gt 1 ] && [[ "$value" = */ ]]; do
+    value="${value%/}"
+  done
+  printf '%s' "$value"
+}
+
+normalize_allow_path_entry() {
+  local entry="$1"
+  local value
+
+  value="$(normalize_spaces "$entry")"
+  if [ -z "$value" ]; then
+    echo ""
+    return
+  fi
+
+  trim_trailing_slashes "$value"
+}
+
+normalize_tool_path() {
+  local path="$1"
+  local normalized
+
+  normalized="$(normalize_spaces "$path")"
+  if [ -z "$normalized" ]; then
+    echo ""
+    return
+  fi
+
+  trim_trailing_slashes "$normalized"
+}
+
+resolve_tool_path() {
+  local tool_path="$1"
+  local cwd_path="$2"
+  local normalized_tool_path
+  local normalized_cwd_path
+
+  normalized_tool_path="$(normalize_tool_path "$tool_path")"
+  if [ -z "$normalized_tool_path" ]; then
+    echo ""
+    return
+  fi
+
+  if [[ "$normalized_tool_path" = /* ]]; then
+    echo "$normalized_tool_path"
+    return
+  fi
+
+  normalized_cwd_path="$(normalize_tool_path "$cwd_path")"
+  if [ -z "$normalized_cwd_path" ]; then
+    echo "$normalized_tool_path"
+    return
+  fi
+
+  if [ "$normalized_tool_path" = "." ]; then
+    echo "$normalized_cwd_path"
+    return
+  fi
+
+  printf '%s/%s' "$normalized_cwd_path" "$normalized_tool_path"
+}
+
+path_is_under_prefix() {
+  local path="$1"
+  local prefix="$2"
+
+  if [ -z "$path" ] || [ -z "$prefix" ]; then
+    return 1
+  fi
+
+  if [ "$prefix" = "/" ]; then
+    return 0
+  fi
+
+  [[ "$path" = "$prefix" || "$path" = "$prefix/"* ]]
+}
+
+path_in_allow_paths() {
+  local path="$1"
+  local allow_paths_csv="$2"
+  local candidate
+  local normalized_candidate
+
+  if [ -z "$allow_paths_csv" ]; then
+    return 1
+  fi
+
+  IFS=',' read -r -a candidates <<<"$allow_paths_csv"
+  for candidate in "${candidates[@]}"; do
+    normalized_candidate="$(normalize_allow_path_entry "$candidate")"
+    if [ -n "$normalized_candidate" ] && path_is_under_prefix "$path" "$normalized_candidate"; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 host_in_allow_urls() {
   local host="$1"
   local allow_urls_csv="$2"
@@ -281,12 +390,32 @@ if [ -n "$TOOL_COMMAND" ]; then
   TOOL_COMMAND="$(normalize_spaces "$TOOL_COMMAND")"
 fi
 
-if [ "$DEBUG_MODE" = "1" ]; then
-  printf 'TOOL_NAME: %s\n' "$TOOL_NAME" >>"$DEBUG_PATH"
-  printf 'TOOL_COMMAND: %s\n' "$TOOL_COMMAND" >>"$DEBUG_PATH"
+if [ -n "$CWD_PATH" ]; then
+  CWD_PATH="$(normalize_tool_path "$CWD_PATH")"
 fi
 
-if [[ "$TOOL_NAME" = "ask_user" ]]; then
+if [ -n "$TOOL_PATH" ]; then
+  TOOL_PATH="$(resolve_tool_path "$TOOL_PATH" "$CWD_PATH")"
+fi
+
+if [ "$DEBUG_MODE" = "1" ]; then
+  printf 'TOOL_NAME: %s\n' "$TOOL_NAME" >>"$DEBUG_PATH"
+  printf 'CWD_PATH: %s\n' "$CWD_PATH" >>"$DEBUG_PATH"
+  printf 'TOOL_COMMAND: %s\n' "$TOOL_COMMAND" >>"$DEBUG_PATH"
+  printf 'TOOL_PATH: %s\n' "$TOOL_PATH" >>"$DEBUG_PATH"
+fi
+
+if [ -n "$TOOL_PATH" ]; then
+  if [ -n "$CWD_PATH" ] && path_is_under_prefix "$TOOL_PATH" "$CWD_PATH"; then
+    BODY=""
+  elif path_in_allow_paths "$TOOL_PATH" "$ALLOW_PATHS"; then
+    BODY=""
+  elif [ -n "$TOOL_NAME" ]; then
+    BODY="${TOOL_NAME}: ${TOOL_PATH}"
+  else
+    BODY="path: ${TOOL_PATH}"
+  fi
+elif [[ "$TOOL_NAME" = "ask_user" ]]; then
   BODY="$QUESTION"
 elif [[ "$TOOL_NAME" = "exit_plan_mode" ]]; then
   BODY="$SUMMARY"
@@ -302,12 +431,6 @@ elif [[ "$TOOL_NAME" = "bash" ]]; then
     BODY=""
   else
     BODY="${TOOL_NAME}"
-  fi
-elif [[ "$TOOL_NAME" = "edit" ]]; then
-  if [ -n "$TOOL_PATH" ]; then
-    BODY="edit: ${TOOL_PATH}"
-  else
-    BODY="edit"
   fi
 elif [[ "$TOOL_NAME" = "report_intent" ]]; then
   # DO NOTHING

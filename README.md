@@ -28,6 +28,7 @@ copilot plugin install tadashi-aikawa/copilot-plugin-notify
 | `COPILOT_NOTIFY_ALLOW_TOOL_RULES`            | comma-separated allow rules (e.g. `shell(git:*),shell(gh:*),shell(curl),write`)               |                             |
 | `COPILOT_NOTIFY_DENY_TOOL_RULES`             | comma-separated deny rules (e.g. `shell(git push),shell(git reset:*),shell(gh api)`)          |                             |
 | `COPILOT_NOTIFY_ALLOW_URLS`                  | comma-separated allowed hosts for URL access checks in `curl` commands                         |                             |
+| `COPILOT_NOTIFY_ALLOW_PATHS`                 | comma-separated allowed path prefixes for any tool with `toolArgs.path`                        |                             |
 | `COPILOT_NOTIFY_DEBUG`                       | set to `1` to enable debug logging (input/debug log + extra `agentStop` dump)                 |                             |
 | `COPILOT_NOTIFY_DEBUG_PATH`                  | debug log path used when `COPILOT_NOTIFY_DEBUG=1`                                              | `/tmp/copilot-notify.jsonl` |
 | `COPILOT_NOTIFY_FORCE_STDOUT`                | set to `1` to emit OSC 777 to stdout instead of `/dev/tty`                                     | `0`                         |
@@ -41,6 +42,7 @@ copilot plugin install tadashi-aikawa/copilot-plugin-notify
 export COPILOT_NOTIFY_ALLOW_TOOL_RULES="write,shell(git:*),shell(gh:*),shell(curl)"
 export COPILOT_NOTIFY_DENY_TOOL_RULES="shell(git push),shell(git reset:*),shell(git clean:*),shell(gh api),shell(gh pr merge)"
 export COPILOT_NOTIFY_ALLOW_URLS="api.github.com,raw.githubusercontent.com,github.com"
+export COPILOT_NOTIFY_ALLOW_PATHS="/Users/tadashi-aikawa/tmp/ai-sandbox,/tmp/safe"
 ```
 
 ## Developer notes
@@ -55,8 +57,15 @@ export COPILOT_NOTIFY_ALLOW_URLS="api.github.com,raw.githubusercontent.com,githu
 
 - Hook payload is read from stdin (JSON).
 - `preToolUse`:
+  - if `toolArgs.path` exists: check `cwd` first.
+    - if path is under `cwd`: do not notify.
+    - relative paths are resolved against `cwd` for this check.
+  - if `toolArgs.path` exists and is outside `cwd`: compare against `COPILOT_NOTIFY_ALLOW_PATHS`.
+    - match rule: exact or prefix-directory match (`/a` matches `/a` and `/a/...`, not `/abc/...`).
+    - if matched: do not notify.
+    - if not matched (or env is empty): notify with `<toolName>: <toolArgs.path>`.
+    - this is an independent plugin-side allowlist and does not replace Copilot CLI directory permissions.
   - `bash`: notify with `bash`, but only when the command should be notified by tool rules.
-  - `edit`: notify with `edit: <toolArgs.path>`.
 - `ask_user`: notify with `toolArgs.question` (newlines are normalized to spaces).
 - `exit_plan_mode`: notify with `toolArgs.summary` (newlines are normalized to spaces).
 - `agentStop`: notify when Copilot finishes an agent turn and waits for user input.
